@@ -221,8 +221,7 @@ def build_message(p: dict) -> str:
         f"🎯 <b>{p['title']}</b>\n"
         f"📡 频道：CH {p['ch']} {ch_label}\n"
         f"🕐 时间：{t_str}\n"
-        f"⚡ 状态：{kind}\n\n"
-        f'🔗 <a href="https://nowplayer.now.com/sports/schedule">打开节目表</a>'
+        f"⚡ 状态：{kind}"
     )
 
 
