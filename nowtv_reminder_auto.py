@@ -29,9 +29,12 @@ FETCH_INTERVAL = 180                # 节目表刷新间隔（秒）
 CHANNEL_IDS = [
     "611", "612",
     "621", "622", "623",
-    "630", "631", "632", "633", "634", "635", "636",
-    "640", "641",
+    "630", "631", "632", "633", "634", "635", "636", "637", "638", "639",
+    "640", "641", "643",
+    "647",
+    "668",
     "680",
+    "683", "684",
 ]
 
 # 关键词过滤（留空 = 全部节目；填关键词只提醒匹配的）
@@ -54,9 +57,17 @@ CHANNEL_NAMES = {
     "634": "Now Sports 4",
     "635": "Now Sports 5",
     "636": "Now Sports 6",
+    "637": "Now Sports 7",
+    "638": "Now Sports 8",
+    "639": "Now Sports 9",
     "640": "MUTV",
     "641": "NBA",
+    "643": "Now Sports Racing",
+    "647": "Now Sports Moto",
+    "668": "Now Sports Horse Racing",
     "680": "Now Sports Plus",
+    "683": "Now Golf",
+    "684": "Now Golf 2",
 }
 
 BASE_HEADERS = {
