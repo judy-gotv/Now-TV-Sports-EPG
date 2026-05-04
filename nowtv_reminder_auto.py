@@ -21,7 +21,7 @@ from datetime import datetime, timezone, timedelta
 
 # ── 配置区（只需改这里）────────────────────────────────────────────────────────
 BOT_TOKEN      = "YOUR_BOT_TOKEN"   # 从 @BotFather 获取
-CHAT_ID        = "YOUR_CHAT_ID"     # Telegram chat_id（群组为负数）
+CHAT_ID        = ["YOUR_CHAT_ID"]   # 支持多个，例如 ["123456", "-1009999999"]
 REMIND_MINUTES = 5                  # 提前几分钟提醒
 WINDOW_MINUTES = 3                  # 提醒窗口宽度（分钟），建议 >= 抓取间隔
 FETCH_INTERVAL = 180                # 节目表刷新间隔（秒）
@@ -193,15 +193,18 @@ def fetch_program_detail(program_id: str, cookies: dict) -> dict | None:
 
 def send_telegram(text: str) -> bool:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    try:
-        r = requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"},
-                          timeout=10)
-        if r.ok:
-            return True
-        print(f"  [TG 失败] {r.status_code}: {r.text[:200]}")
-    except Exception as e:
-        print(f"  [TG 网络错误] {e}")
-    return False
+    all_ok = True
+    for chat_id in (CHAT_ID if isinstance(CHAT_ID, list) else [CHAT_ID]):
+        try:
+            r = requests.post(url, data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+                              timeout=10)
+            if not r.ok:
+                print(f"  [TG 失败] chat={chat_id} {r.status_code}: {r.text[:200]}")
+                all_ok = False
+        except Exception as e:
+            print(f"  [TG 网络错误] chat={chat_id}: {e}")
+            all_ok = False
+    return all_ok
 
 
 def build_message(ch: str, title: str, is_live: bool, dt: datetime) -> str:
