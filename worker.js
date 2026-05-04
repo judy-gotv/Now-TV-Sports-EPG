@@ -156,8 +156,14 @@ async function fetchProgramDetail(programId, cookie) {
     }
     const isLive = data.isLive === "Y" || data.isLive === true;
     if (!title || title.includes("请留意下播映赛事")) return null;
-    console.log(`Program ${programId}: "${title}", isLive=${isLive}`);
-    return { title, isLive };
+    const imageUrl = (
+      data.chiImageUrl || data.engImageUrl ||
+      data.programImage || data.imageUrl ||
+      data.horizontalImageUrl || data.landscapeImageUrl ||
+      data.image || data.thumbnail || ""
+    ).trim();
+    console.log(`Program ${programId}: "${title}", isLive=${isLive}, img=${imageUrl ? "✓" : "✗"}`);
+    return { title, isLive, imageUrl };
   } catch (e) {
     console.warn(`Program detail ${programId}: ${e}`);
     return null;
@@ -171,10 +177,27 @@ function matchKeywords(title) {
   return KEYWORDS.some((kw) => tl.includes(kw.toLowerCase()));
 }
 
+// ── 频道运动图标 ──────────────────────────────────────────────────────────────
+function getSportEmoji(ch) {
+  const map = {
+    "611": "⚽", "612": "🏎️",
+    "621": "⚽", "622": "⚽", "623": "⚽",
+    "630": "🏅", "631": "🏅",
+    "632": "⚽", "633": "⚽",
+    "634": "🎾", "635": "🏅", "636": "🎾",
+    "637": "🎱", "638": "🏅", "639": "🏅",
+    "640": "⚽", "641": "🏀", "643": "🏎️",
+    "647": "🏍️", "668": "🐴", "680": "🏅",
+    "683": "⛳", "684": "⛳",
+  };
+  return map[ch] || "📺";
+}
+
 // ── 消息构建 ──────────────────────────────────────────────────────────────────
 function buildMessage(p) {
-  const icon = p.live ? "🔴" : "📺";
-  const kind = p.live ? "直播即将开始 🔥" : "即将播出";
+  const liveIcon = p.live ? "🔴" : "📺";
+  const liveText = p.live ? "直播即将开始 🔥" : "即将播出";
+  const sportEmoji = getSportEmoji(p.ch);
   const hkt = new Date(p.dt.getTime() + 8 * 3600_000);
   const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const mm = String(hkt.getUTCMonth() + 1).padStart(2, "0");
@@ -185,28 +208,42 @@ function buildMessage(p) {
   const tStr = `${mm}/${dd}（${dow}）${hh}:${mi} HKT`;
   const chLabel = CHANNEL_NAMES[p.ch] ?? `CH ${p.ch}`;
   return (
-    `${icon} <b>Now TV Sports · 开播前 ${REMIND_MINUTES} 分钟提醒</b>\n\n` +
-    `🎯 <b>${p.title}</b>\n` +
-    `📡 频道：CH ${p.ch} ${chLabel}\n` +
-    `🕐 时间：${tStr}\n` +
-    `⚡ 状态：${kind}`
+    `${liveIcon} <b>${liveText}</b>\n` +
+    `━━━━━━━━━━━━━━━\n` +
+    `${sportEmoji} <b>${p.title}</b>\n` +
+    `━━━━━━━━━━━━━━━\n` +
+    `📡 CH ${p.ch} · ${chLabel}\n` +
+    `🕐 ${tStr}\n\n` +
+    `<i>Now TV Sports · 开播前 ${REMIND_MINUTES} 分钟提醒</i>`
   );
 }
 
-// ── Telegram 发送（支持多个 CHAT_ID，用逗号分隔）────────────────────────────
-async function sendTelegram(env, text) {
+// ── Telegram 发送（支持多个 CHAT_ID，有图用 sendPhoto，失败降级 sendMessage）──
+async function sendTelegram(env, text, imageUrl = "") {
   const chatIds = env.CHAT_ID.split(",").map(s => s.trim()).filter(Boolean);
   let allOk = true;
   for (const chatId of chatIds) {
     try {
-      const r = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
-      });
-      if (!r.ok) {
-        console.error(`TG失败 chat=${chatId} ${r.status}: ${await r.text()}`);
-        allOk = false;
+      let ok = false;
+      if (imageUrl) {
+        const r = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendPhoto`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: chatId, photo: imageUrl, caption: text, parse_mode: "HTML" }),
+        });
+        ok = r.ok;
+        if (!ok) console.warn(`sendPhoto失败(${r.status})，降级文字消息`);
+      }
+      if (!ok) {
+        const r = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
+        });
+        if (!r.ok) {
+          console.error(`TG失败 chat=${chatId} ${r.status}: ${await r.text()}`);
+          allOk = false;
+        }
       }
     } catch (e) {
       console.error(`TG网络错误 chat=${chatId}: ${e}`);
@@ -260,7 +297,7 @@ export default {
         }
 
         const prog = { ch: chId, title: detail.title, live: detail.isLive, dt: item.dt };
-        const ok = await sendTelegram(env, buildMessage(prog));
+        const ok = await sendTelegram(env, buildMessage(prog), detail.imageUrl || "");
         if (ok) {
           await env.SENT_KV.put(key, "1", { expirationTtl: 86400 });
           sentThisRun.add(dedupeKey);

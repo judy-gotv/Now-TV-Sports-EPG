@@ -201,7 +201,13 @@ def fetch_program_detail(program_id: str, cookies: dict) -> dict | None:
         if not title or "请留意下播映赛事" in title:
             return None
         is_live = data.get("isLive") in ("Y", True)
-        return {"title": title, "live": is_live}
+        image_url = (
+            data.get("chiImageUrl") or data.get("engImageUrl") or
+            data.get("programImage") or data.get("imageUrl") or
+            data.get("horizontalImageUrl") or data.get("landscapeImageUrl") or
+            data.get("image") or data.get("thumbnail") or ""
+        ).strip()
+        return {"title": title, "live": is_live, "image_url": image_url}
     except Exception as e:
         print(f"  [警告] 详情 API {program_id}: {e}")
         return None
@@ -209,33 +215,62 @@ def fetch_program_detail(program_id: str, cookies: dict) -> dict | None:
 
 # ── Telegram 发送 ────────────────────────────────────────────────────────────────
 
-def send_telegram(text: str) -> bool:
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+def send_telegram(text: str, image_url: str = "") -> bool:
     all_ok = True
     for chat_id in (CHAT_ID if isinstance(CHAT_ID, list) else [CHAT_ID]):
         try:
-            r = requests.post(url, data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-                              timeout=10)
-            if not r.ok:
-                print(f"  [TG 失败] chat={chat_id} {r.status_code}: {r.text[:200]}")
-                all_ok = False
+            ok = False
+            if image_url:
+                r = requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                    json={"chat_id": chat_id, "photo": image_url, "caption": text, "parse_mode": "HTML"},
+                    timeout=10,
+                )
+                ok = r.ok
+                if not ok:
+                    print(f"  [sendPhoto失败({r.status_code})] 降级文字消息")
+            if not ok:
+                r = requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                    json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+                    timeout=10,
+                )
+                if not r.ok:
+                    print(f"  [TG 失败] chat={chat_id} {r.status_code}: {r.text[:200]}")
+                    all_ok = False
         except Exception as e:
             print(f"  [TG 网络错误] chat={chat_id}: {e}")
             all_ok = False
     return all_ok
 
 
+SPORT_EMOJI = {
+    "611": "⚽", "612": "🏎️",
+    "621": "⚽", "622": "⚽", "623": "⚽",
+    "630": "🏅", "631": "🏅",
+    "632": "⚽", "633": "⚽",
+    "634": "🎾", "635": "🏅", "636": "🎾",
+    "637": "🎱", "638": "🏅", "639": "🏅",
+    "640": "⚽", "641": "🏀", "643": "🏎️",
+    "647": "🏍️", "668": "🐴", "680": "🏅",
+    "683": "⛳", "684": "⛳",
+}
+
+
 def build_message(ch: str, title: str, is_live: bool, dt: datetime) -> str:
-    icon = "🔴" if is_live else "📺"
-    kind = "直播即将开始 🔥" if is_live else "即将播出"
+    live_icon = "🔴" if is_live else "📺"
+    live_text = "直播即将开始 🔥" if is_live else "即将播出"
+    sport_emoji = SPORT_EMOJI.get(ch, "📺")
     t_str = dt.strftime("%m/%d（%a）%H:%M HKT")
     ch_label = CHANNEL_NAMES.get(ch, f"CH {ch}")
     return (
-        f"{icon} <b>Now TV Sports · 开播前 {REMIND_MINUTES} 分钟提醒</b>\n\n"
-        f"🎯 <b>{title}</b>\n"
-        f"📡 频道：CH {ch} {ch_label}\n"
-        f"🕐 时间：{t_str}\n"
-        f"⚡ 状态：{kind}"
+        f"{live_icon} <b>{live_text}</b>\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"{sport_emoji} <b>{title}</b>\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"📡 CH {ch} · {ch_label}\n"
+        f"🕐 {t_str}\n\n"
+        f"<i>Now TV Sports · 开播前 {REMIND_MINUTES} 分钟提醒</i>"
     )
 
 
@@ -315,7 +350,7 @@ def main():
                     continue
 
                 msg = build_message(ch_id, detail["title"], detail["live"], item["dt"])
-                if send_telegram(msg):
+                if send_telegram(msg, detail.get("image_url", "")):
                     sent.add(key)
                     sent_this_run.add(dedupe_key)
                     print(f"[{now_hkt_str()}] ✅ 已提醒：{detail['title']} (CH {ch_id})")
