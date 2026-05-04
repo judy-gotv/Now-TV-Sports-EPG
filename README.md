@@ -27,9 +27,17 @@
 | 634 | Now Sports 4 | WTA 网球 |
 | 635 | Now Sports 5 | 综合体育 |
 | 636 | Now Sports 6 | ATP 网球 |
+| 637 | Now Sports 7 | 桌球 / 斯诺克 |
+| 638 | Now Sports 8 | 综合体育 |
+| 639 | Now Sports 9 | 综合体育 |
 | 640 | MUTV | 曼联专属 |
 | 641 | NBA | NBA 篮球 |
+| 643 | Now Sports Racing | 赛车 / 欧冠 / 欧霸 |
+| 647 | Now Sports Moto | MotoGP |
+| 668 | Now Sports Horse Racing | 赛马直播 |
 | 680 | Now Sports Plus | 综合体育 |
+| 683 | Now Golf | 高尔夫 DP World Tour |
+| 684 | Now Golf 2 | 高尔夫 PGA Tour |
 
 ---
 
