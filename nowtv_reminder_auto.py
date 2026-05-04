@@ -181,7 +181,14 @@ def fetch_program_detail(program_id: str, cookies: dict) -> dict | None:
         data = resp.json()
         series = (data.get("chiSeriesName") or data.get("engSeriesName") or "").strip()
         prog   = (data.get("chiProgName")   or data.get("engProgName")   or "").strip()
-        title  = f"{series} {prog}".strip() if prog else series
+        if not prog:
+            title = series
+        elif series and not prog.startswith(series):
+            title = f"{series} {prog}".strip()
+        else:
+            title = prog
+        if not title or "请留意下播映赛事" in title:
+            return None
         is_live = data.get("isLive") in ("Y", True)
         return {"title": title, "live": is_live}
     except Exception as e:
@@ -271,6 +278,8 @@ def main():
         hi = REMIND_MINUTES * 60
         lo = (REMIND_MINUTES - WINDOW_MINUTES) * 60
 
+        sent_this_run: set = set()  # 跨频道去重
+
         for ch_id, items in schedule.items():
             for item in items:
                 diff = (item["dt"] - now_dt).total_seconds()
@@ -287,9 +296,17 @@ def main():
                 if not match_keywords(detail["title"]):
                     continue
 
+                # 跨频道去重：同标题+同时间只推送一次
+                dedupe_key = f"{detail['title']}|{item['dt'].timestamp()}"
+                if dedupe_key in sent_this_run:
+                    sent.add(key)
+                    print(f"[{now_hkt_str()}] ⏭ 跨频道去重跳过：{detail['title']} (CH {ch_id})")
+                    continue
+
                 msg = build_message(ch_id, detail["title"], detail["live"], item["dt"])
                 if send_telegram(msg):
                     sent.add(key)
+                    sent_this_run.add(dedupe_key)
                     print(f"[{now_hkt_str()}] ✅ 已提醒：{detail['title']} (CH {ch_id})")
 
         time.sleep(30)
