@@ -198,16 +198,11 @@ def fetch_program_detail(program_id: str, cookies: dict) -> dict | None:
             title = f"{series} {prog}".strip()
         else:
             title = prog
-        if not title or "请留意下播映赛事" in title:
+        PLACEHOLDERS = ["请留意下播映赛事", "請留意下播映賽事"]
+        if not title or any(p in title for p in PLACEHOLDERS):
             return None
         is_live = data.get("isLive") in ("Y", True)
-        image_url = (
-            data.get("chiImageUrl") or data.get("engImageUrl") or
-            data.get("programImage") or data.get("imageUrl") or
-            data.get("horizontalImageUrl") or data.get("landscapeImageUrl") or
-            data.get("image") or data.get("thumbnail") or ""
-        ).strip()
-        return {"title": title, "live": is_live, "image_url": image_url}
+        return {"title": title, "live": is_live}
     except Exception as e:
         print(f"  [警告] 详情 API {program_id}: {e}")
         return None
@@ -215,33 +210,42 @@ def fetch_program_detail(program_id: str, cookies: dict) -> dict | None:
 
 # ── Telegram 发送 ────────────────────────────────────────────────────────────────
 
-def send_telegram(text: str, image_url: str = "") -> bool:
-    all_ok = True
+def send_telegram(text: str) -> list:
+    """发送消息，返回 [{chat_id, message_id}] 列表"""
+    sent = []
     for chat_id in (CHAT_ID if isinstance(CHAT_ID, list) else [CHAT_ID]):
         try:
-            ok = False
-            if image_url:
-                r = requests.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-                    json={"chat_id": chat_id, "photo": image_url, "caption": text, "parse_mode": "HTML"},
-                    timeout=10,
-                )
-                ok = r.ok
-                if not ok:
-                    print(f"  [sendPhoto失败({r.status_code})] 降级文字消息")
-            if not ok:
-                r = requests.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                    json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-                    timeout=10,
-                )
-                if not r.ok:
-                    print(f"  [TG 失败] chat={chat_id} {r.status_code}: {r.text[:200]}")
-                    all_ok = False
+            r = requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+                timeout=10,
+            )
+            if r.ok:
+                msg_id = r.json().get("result", {}).get("message_id")
+                if msg_id:
+                    sent.append({"chat_id": chat_id, "message_id": msg_id})
+            else:
+                print(f"  [TG 失败] chat={chat_id} {r.status_code}: {r.text[:200]}")
         except Exception as e:
             print(f"  [TG 网络错误] chat={chat_id}: {e}")
-            all_ok = False
-    return all_ok
+    return sent
+
+
+def delete_telegram_later(chat_id: str, message_id: int, delay: int = 300):
+    """在 delay 秒后删除消息（后台线程）"""
+    import threading
+    def _delete():
+        time.sleep(delay)
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage",
+                json={"chat_id": chat_id, "message_id": message_id},
+                timeout=10,
+            )
+            print(f"[{now_hkt_str()}] 🗑 已删除消息 {message_id} (chat {chat_id})")
+        except Exception as e:
+            print(f"  [删除失败] {e}")
+    threading.Thread(target=_delete, daemon=True).start()
 
 
 SPORT_EMOJI = {
@@ -350,10 +354,13 @@ def main():
                     continue
 
                 msg = build_message(ch_id, detail["title"], detail["live"], item["dt"])
-                if send_telegram(msg, detail.get("image_url", "")):
+                sent_msgs = send_telegram(msg)
+                if sent_msgs:
                     sent.add(key)
                     sent_this_run.add(dedupe_key)
                     print(f"[{now_hkt_str()}] ✅ 已提醒：{detail['title']} (CH {ch_id})")
+                    for m in sent_msgs:
+                        delete_telegram_later(m["chat_id"], m["message_id"], delay=300)
 
         time.sleep(30)
 
