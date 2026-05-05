@@ -296,6 +296,12 @@ async function runCheck(env) {
 
     for (const item of upcoming) {
       const key = `${chId}|${item.id}`;
+
+      // 同一 program ID 在本次运行中已处理过（week=0/1 重复出现）
+      if (sentThisRun.has(item.id)) {
+        continue;
+      }
+
       const alreadySent = await env.SENT_KV.get(key);
       if (alreadySent) continue;
 
@@ -303,10 +309,11 @@ async function runCheck(env) {
       if (!detail || !detail.title) continue;
       if (!matchKeywords(detail.title)) continue;
 
+      // 跨频道去重：同标题+同时间不重复推送
       const dedupeKey = `${detail.title}|${item.dt.getTime()}`;
       if (sentThisRun.has(dedupeKey)) {
         await env.SENT_KV.put(key, "1", { expirationTtl: 86400 });
-        console.log(`⏭ 跨频道去重跳过：${detail.title} (CH ${chId})`);
+        console.log(`⏭ 去重跳过：${detail.title} (CH ${chId})`);
         continue;
       }
 
@@ -314,11 +321,13 @@ async function runCheck(env) {
       const result = await sendTelegram(env, buildMessage(prog));
       if (result.ok) {
         await env.SENT_KV.put(key, "1", { expirationTtl: 86400 });
+        sentThisRun.add(item.id);
         sentThisRun.add(dedupeKey);
         console.log(`✅ 已提醒：${detail.title} (CH ${chId})`);
         const deleteAt = nowSec + DELETE_AFTER_SEC;
         for (const { chatId, messageId } of result.messages) {
           await env.SENT_KV.put(`del:${deleteAt}:${chatId}:${messageId}`, "1", { expirationTtl: 900 });
+          console.log(`🕐 登记删除：msg ${messageId} at ${deleteAt}`);
         }
       }
     }

@@ -328,12 +328,16 @@ def main():
         hi = REMIND_MINUTES * 60
         lo = (REMIND_MINUTES - WINDOW_MINUTES) * 60
 
-        sent_this_run: set = set()  # 跨频道去重
+        sent_this_run: set = set()  # 去重（program ID 和 title+time）
 
         for ch_id, items in schedule.items():
             for item in items:
                 diff = (item["dt"] - now_dt).total_seconds()
                 if not (lo < diff <= hi):
+                    continue
+
+                # 同一 program ID 本次已处理（week=0/1 重复）
+                if item["id"] in sent_this_run:
                     continue
 
                 key = f"{ch_id}|{item['id']}"
@@ -357,6 +361,7 @@ def main():
                 sent_msgs = send_telegram(msg)
                 if sent_msgs:
                     sent.add(key)
+                    sent_this_run.add(item["id"])
                     sent_this_run.add(dedupe_key)
                     print(f"[{now_hkt_str()}] ✅ 已提醒：{detail['title']} (CH {ch_id})")
                     for m in sent_msgs:
