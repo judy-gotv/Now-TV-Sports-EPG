@@ -91,7 +91,7 @@ async function fetchScheduleItems(channelId, cookie) {
   const currentDay = nowHkt.getUTCDate();
   const currentYear = nowHkt.getUTCFullYear();
 
-  for (let week = 0; week <= 1; week++) {
+  for (let week = 0; week <= 0; week++) {
     const url = `${BASE_URL}/tvguide/channeldetail/${channelId}/${week}`;
     try {
       const resp = await fetch(url, { headers });
@@ -155,8 +155,7 @@ async function fetchProgramDetail(programId, cookie) {
       title = progName;
     }
     const isLive = data.isLive === "Y" || data.isLive === true;
-    const PLACEHOLDERS = ["请留意下播映赛事", "請留意下播映賽事"];
-    if (!title || PLACEHOLDERS.some(p => title.includes(p))) return null;
+    if (!title || title.startsWith("请留意") || title.startsWith("請留意")) return null;
     console.log(`Program ${programId}: "${title}", isLive=${isLive}`);
     return { title, isLive };
   } catch (e) {
@@ -228,6 +227,7 @@ async function sendTelegram(env, text) {
       if (resp.ok) {
         const json = await resp.json();
         const messageId = json.result?.message_id;
+        console.log(`TG发送成功 chat=${chatId} msg=${messageId}`);
         if (messageId) messages.push({ chatId, messageId });
       } else {
         console.error(`TG失败 chat=${chatId} ${resp.status}: ${await resp.text()}`);
@@ -241,42 +241,52 @@ async function sendTelegram(env, text) {
   return { ok: allOk, messages };
 }
 
-// ── 删除 Telegram 消息 ────────────────────────────────────────────────────────
+// ── 删除 Telegram 消息，返回是否成功 ─────────────────────────────────────────
 async function deleteTelegramMessage(env, chatId, messageId) {
   try {
-    await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/deleteMessage`, {
+    const resp = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/deleteMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, message_id: messageId }),
     });
-    console.log(`🗑 已删除消息 ${messageId} (chat ${chatId})`);
+    const json = await resp.json();
+    if (resp.ok && json.result === true) {
+      console.log(`🗑 群内消息已删除 msg=${messageId} chat=${chatId}`);
+      return true;
+    }
+    // 消息不存在（已被手动删除）也视为成功
+    if (json.description && json.description.includes("message to delete not found")) {
+      console.log(`🗑 消息已不存在，跳过 msg=${messageId}`);
+      return true;
+    }
+    console.error(`❌ 群内消息删除失败 msg=${messageId} chat=${chatId} status=${resp.status} err=${JSON.stringify(json)}`);
+    return false;
   } catch (e) {
-    console.warn(`删除消息失败: ${e}`);
+    console.error(`❌ 删除消息网络错误 msg=${messageId}: ${e}`);
+    return false;
   }
 }
 
-// ── 主逻辑（fetch 和 scheduled 共用）────────────────────────────────────────
+// ── 主逻辑 ───────────────────────────────────────────────────────────────────
 async function runCheck(env) {
   const nowSec = Math.floor(Date.now() / 1000);
 
-  // ── 步骤1：删除到期的消息（5分钟前发送的）──────────────────────────────────
+  // ── 步骤1：处理到期删除任务 ──────────────────────────────────────────────────
   try {
     const pending = await env.SENT_KV.list({ prefix: "del:" });
     for (const { name } of pending.keys) {
-      const parts = name.split(":");
-      const deleteAt = parseInt(parts[1]);
-      if (nowSec >= deleteAt) {
-        const chatId = parts[2];
-        const messageId = parseInt(parts[3]);
-        await deleteTelegramMessage(env, chatId, messageId);
-        await env.SENT_KV.delete(name);
+      const val = await env.SENT_KV.get(name, { type: "json" });
+      if (!val) { await env.SENT_KV.delete(name); continue; }
+      if (nowSec >= val.deleteAt) {
+        const ok = await deleteTelegramMessage(env, val.chatId, val.messageId);
+        if (ok) await env.SENT_KV.delete(name);
       }
     }
   } catch (e) {
-    console.warn(`处理删除队列失败: ${e}`);
+    console.warn(`删除队列处理失败: ${e}`);
   }
 
-  // ── 步骤2：抓取节目表并推送提醒 ────────────────────────────────────────────
+  // ── 步骤2：抓取节目表并推送提醒 ──────────────────────────────────────────────
   const cookie = await getSessionCookie();
   const nowMs = Date.now();
   const hiMs = REMIND_MINUTES * 60_000;
@@ -295,13 +305,9 @@ async function runCheck(env) {
     });
 
     for (const item of upcoming) {
+      if (sentThisRun.has(item.id)) continue;
+
       const key = `${chId}|${item.id}`;
-
-      // 同一 program ID 在本次运行中已处理过（week=0/1 重复出现）
-      if (sentThisRun.has(item.id)) {
-        continue;
-      }
-
       const alreadySent = await env.SENT_KV.get(key);
       if (alreadySent) continue;
 
@@ -309,7 +315,6 @@ async function runCheck(env) {
       if (!detail || !detail.title) continue;
       if (!matchKeywords(detail.title)) continue;
 
-      // 跨频道去重：同标题+同时间不重复推送
       const dedupeKey = `${detail.title}|${item.dt.getTime()}`;
       if (sentThisRun.has(dedupeKey)) {
         await env.SENT_KV.put(key, "1", { expirationTtl: 86400 });
@@ -319,15 +324,17 @@ async function runCheck(env) {
 
       const prog = { ch: chId, title: detail.title, live: detail.isLive, dt: item.dt };
       const result = await sendTelegram(env, buildMessage(prog));
-      if (result.ok) {
+      console.log(`sendTelegram结果: ok=${result.ok} 成功发送=${result.messages.length}个`);
+      if (result.messages.length > 0) {
         await env.SENT_KV.put(key, "1", { expirationTtl: 86400 });
         sentThisRun.add(item.id);
         sentThisRun.add(dedupeKey);
         console.log(`✅ 已提醒：${detail.title} (CH ${chId})`);
         const deleteAt = nowSec + DELETE_AFTER_SEC;
         for (const { chatId, messageId } of result.messages) {
-          await env.SENT_KV.put(`del:${deleteAt}:${chatId}:${messageId}`, "1", { expirationTtl: 900 });
-          console.log(`🕐 登记删除：msg ${messageId} at ${deleteAt}`);
+          const delKey = `del:${chatId}_${messageId}`;
+          await env.SENT_KV.put(delKey, JSON.stringify({ chatId, messageId, deleteAt }), { expirationTtl: 3600 });
+          console.log(`🕐 登记删除 msg=${messageId} at=${deleteAt}`);
         }
       }
     }
@@ -339,8 +346,21 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.searchParams.get("test") === "1") {
-      ctx.waitUntil(runCheck(env));
+      ctx.waitUntil(runCheck(env, ctx));
       return new Response("触发成功，请查看 Telegram 和日志", { status: 200 });
+    }
+    // 清空所有 KV 记录（sent + del），用法：?flush=1
+    if (url.searchParams.get("flush") === "1") {
+      let cursor, count = 0;
+      do {
+        const list = await env.SENT_KV.list({ cursor });
+        for (const { name } of list.keys) {
+          await env.SENT_KV.delete(name);
+          count++;
+        }
+        cursor = list.list_complete ? undefined : list.cursor;
+      } while (cursor);
+      return new Response(`✅ 已清空 KV，共删除 ${count} 条记录`, { status: 200 });
     }
     // 调试：查看任意节目的原始 API 数据，用法：?debug=节目ID
     const debugId = url.searchParams.get("debug");
@@ -357,7 +377,7 @@ export default {
     return new Response("Now TV Sports EPG Worker running.", { status: 200 });
   },
 
-  async scheduled(event, env, ctx) {
-    ctx.waitUntil(runCheck(env));
+  async scheduled(_event, env, ctx) {
+    ctx.waitUntil(runCheck(env, ctx));
   },
 };
